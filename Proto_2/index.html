@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Silchar Live Bus Tracker</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <style>
+        body { font-family: sans-serif; margin: 0; }
+        #map { height: 100vh; }
+        .info-panel { position: absolute; top: 10px; right: 10px; background: white; padding: 15px; border-radius: 8px; z-index: 1000; max-width: 250px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        h3, label { margin-top: 0; margin-bottom: 5px; }
+        #route-select { width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 4px; border: 1px solid #ccc; }
+        
+        /* Style for the emoji marker */
+        .emoji-icon {
+            font-size: 24px;
+            background: transparent;
+            border: none;
+            text-align: center;
+            line-height: 24px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+<div class="info-panel">
+    <label for="route-select"><strong>Filter by Route:</strong></label>
+    <select id="route-select">
+        <option value="all">All Routes</option>
+    </select>
+    <hr>
+    <h3>Nearest Bus</h3>
+    <p id="nearest-bus-info">Getting your location...</p>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.10.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.10.0/firebase-firestore-compat.js"></script>
+
+<script>
+    // --- START: PASTE YOUR FIREBASE CONFIG HERE ---
+    const firebaseConfig = {
+        apiKey: "AIzaSyCQEoabSTpux3RU_2zRyaSq5mD5nUDKMeE",
+        authDomain: "silchar-bus-tracker.firebaseapp.com",
+        projectId: "silchar-bus-tracker",
+        storageBucket: "silchar-bus-tracker.firebasestorage.app",
+        messagingSenderId: "495664032107",
+        appId: "1:495664032107:web:16fa0b37a2bb7b4294c42e",
+        measurementId: "G-FXTYKDB0JG"
+    };
+    // --- END: PASTE YOUR FIREBASE CONFIG HERE ---
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    const map = L.map('map').setView([24.82, 92.79], 13); // Centered on Silchar
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    // --- Create a custom icon using the bus emoji ---
+    const busIcon = L.divIcon({
+        html: '🚌',
+        className: 'emoji-icon',
+        iconSize: [24, 24],
+        iconAnchor: [12, 24] // Point of the icon which will correspond to marker's location
+    });
+
+    const infoPanel = document.getElementById('nearest-bus-info');
+    const routeSelect = document.getElementById('route-select');
+
+    let userLocation = null;
+    const busMarkers = {};
+    let unsubscribe; 
+
+    async function populateRoutes() {
+        try {
+            const snapshot = await db.collection("buses").where("status", "==", "active").get();
+            const routes = new Set();
+            snapshot.forEach(doc => {
+                routes.add(doc.data().routeName);
+            });
+            routes.forEach(route => {
+                const option = document.createElement('option');
+                option.value = route;
+                option.textContent = route;
+                routeSelect.appendChild(option);
+            });
+        } catch (error) {
+            console.error("Error fetching routes: ", error);
+        }
+    }
+    
+    function clearBusMarkers() {
+        for (const id in busMarkers) {
+            map.removeLayer(busMarkers[id]);
+            delete busMarkers[id];
+        }
+    }
+
+    function setupBusListener(selectedRoute) {
+        if (unsubscribe) {
+            unsubscribe();
+        }
+        
+        clearBusMarkers();
+        infoPanel.textContent = "Tracking active buses...";
+
+        let query = db.collection("buses").where("status", "==", "active");
+        
+        if (selectedRoute && selectedRoute !== 'all') {
+            query = query.where("routeName", "==", selectedRoute);
+        }
+
+        unsubscribe = query.onSnapshot(snapshot => {
+            let nearestBus = { id: null, dist: Infinity };
+
+            if (snapshot.empty) {
+                infoPanel.textContent = "No active buses found for this route.";
+            }
+
+            snapshot.forEach(doc => {
+                const bus = { id: doc.id, ...doc.data() };
+                const pos = [bus.location.latitude, bus.location.longitude];
+
+                if (busMarkers[bus.id]) {
+                    busMarkers[bus.id].setLatLng(pos);
+                } else {
+                    // --- Use the custom busIcon when creating the marker ---
+                    busMarkers[bus.id] = L.marker(pos, { icon: busIcon }).addTo(map);
+                }
+                busMarkers[bus.id].bindPopup(`<b>${bus.busId}</b><br>${bus.routeName}`);
+
+                if (userLocation) {
+                    const dist = getDistance(userLocation.lat, userLocation.lng, pos[0], pos[1]);
+                    if (dist < nearestBus.dist) {
+                        nearestBus = { id: bus.id, dist: dist, data: bus };
+                    }
+                }
+            });
+
+            if (userLocation && nearestBus.id) {
+                updateInfoPanel(nearestBus);
+            }
+        }, error => {
+            console.error("Error with Firestore listener: ", error);
+            infoPanel.textContent = "Error connecting to tracker service.";
+        });
+    }
+
+    function updateInfoPanel(nearestBus) {
+        const { data, dist } = nearestBus;
+        const etaMinutes = (dist / 20) * 60;
+
+        infoPanel.innerHTML = `
+            <b>Bus ID:</b> ${data.busId}<br>
+            <b>Route:</b> ${data.routeName}<br>
+            <b>Distance:</b> ${dist.toFixed(2)} km away<br>
+            <b>Est. Arrival:</b> ${etaMinutes.toFixed(0)} mins
+        `;
+        Object.keys(busMarkers).forEach(id => {
+            busMarkers[id].setOpacity(id === nearestBus.id ? 1.0 : 0.6);
+        });
+    }
+
+    function getDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371; // Earth radius in km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    populateRoutes();
+
+    navigator.geolocation.getCurrentPosition(position => {
+        userLocation = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+        };
+        L.marker([userLocation.lat, userLocation.lng]).addTo(map)
+            .bindPopup('Your Location').openPopup();
+        map.setView([userLocation.lat, userLocation.lng], 14);
+        
+        setupBusListener('all'); 
+    }, () => {
+        infoPanel.innerText = "Please allow location access to find the nearest bus.";
+    });
+
+    routeSelect.addEventListener('change', (event) => {
+        setupBusListener(event.target.value);
+    });
+
+</script>
+</body>
+</html>
