@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Bus Simulator</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 0;
+      }
+      #map {
+        height: 100vh;
+      }
+      .info-box {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: white;
+        padding: 10px;
+        border-radius: 5px;
+        z-index: 1000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div class="info-box">
+      <strong>Bus Simulator</strong><br />Click on the map to move the bus.
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.10.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.10.0/firebase-firestore-compat.js"></script>
+
+    <script src="/env-loader.js"></script>
+
+    <script>
+      // Initialize Firebase from runtime env (window.__env)
+      const cfg = window.__env || {};
+      const firebaseConfig = {
+        apiKey: "AIzaSyAvNvmwof4LqUZG3JFcfgKpzGyg7WYnF6I",
+        authDomain: "punjab-bus-tracker-808ae.firebaseapp.com",
+        projectId: "punjab-bus-tracker-808ae",
+        storageBucket: "punjab-bus-tracker-808ae.firebasestorage.app",
+        messagingSenderId: "88510961633",
+        appId: "1:88510961633:web:f2a8f8b632ae32a883a4a0",
+        measurementId: "G-HP85P0257P"
+      };
+
+      firebase.initializeApp(firebaseConfig);
+      const db = firebase.firestore();
+
+      // The ID of the bus we are simulating
+      const BUS_ID = "PB02_BUS_45";
+      const busDocRef = db.collection("bus_locations").doc(BUS_ID);
+
+      // Initialize Leaflet map
+      const map = L.map("map").setView([30.901, 75.8573], 13); // Centered on Ludhiana
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap contributors",
+      }).addTo(map);
+
+      // Create a bus icon
+      const busIcon = L.icon({
+        iconUrl: "https://img.icons8.com/plasticine/100/000000/bus.png",
+        iconSize: [50, 50],
+      });
+
+      // Add bus marker to the map
+      const busMarker = L.marker([30.901, 75.8573], { icon: busIcon }).addTo(
+        map
+      );
+      busMarker.bindPopup("Bus " + BUS_ID).openPopup();
+
+      // --- Core Logic: Update location on map click ---
+      map.on("click", function (e) {
+        const newLat = e.latlng.lat;
+        const newLng = e.latlng.lng;
+
+        // Move the marker on this simulator map
+        busMarker.setLatLng([newLat, newLng]);
+
+        // Create a Firestore GeoPoint
+        const newLocation = new firebase.firestore.GeoPoint(newLat, newLng);
+
+        // Update the location in the Firestore database
+        busDocRef
+          .update({
+            location: newLocation,
+          })
+          .then(() => {
+            console.log("Bus location updated successfully!");
+          })
+          .catch((error) => {
+            console.error("Error updating location: ", error);
+          });
+      });
+    </script>
+  </body>
+</html>
